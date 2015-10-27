@@ -1,0 +1,17 @@
+.Rproj.user
+.Rhistory
+.RData
+*.Rproj
+repdata_peer2_doc_pd01016005curr.pdf
+*.bz2
+repdata_data_StormData.csv
+*.html
+*.RData
+*.png
+StormData_cache/html/__packages
+*.dcf
+StormData_cache/html/unnamed-chunk-1_ec7a3dc5e315b84eafa749203c0b01a7.rdb
+*.rdx
+StormData_cache/html/unnamed-chunk-7_c63ae134d343ed183e3edb8d392b0a3e.rdb
+*.rdb
+*.pdf
