@@ -1,0 +1,301 @@
+---
+title: "Storm Events Impact Analysis"
+author: "FCO"
+date: "25 oktober 2015"
+output: html_document
+---
+
+# Storm Events Impact Analysis
+## Synopsis
+Using the NCOAA NCDC [Storm Data](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2) database, an analysis was done to determine which types of events across the US are the most harmful to public health and which have the greatest economic consequences.
+
+We find that several data cleanup actions are necessary. Eventually we find that in terms of economic consequences, Flood, Hurricane/Typhoon and Storm Surge are the events that have the most impact. In terms of public health, Tornado, Excessive Heat and Flood are the most harmful events.
+
+## An Outlay for the Data Analysis
+### Research Questions
+ 1. Across the United States, which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health?
+ 1. Across the United States, which types of events have the greatest economic consequences?
+ 
+What is important to note in advance is that we are asked to:
+
+ 1. Consider data across the United States.
+ 1. The `EVTYPE` variable is of special interest, it denotes the event types.
+ 1. We will produce two analyses, one for population health and one for economic consequences.
+ 
+Since the data we use spans several decades, it seems like a necessity to adjust for inflation when comparing economic consequences of events.
+ 
+### Selecting Columns
+```{r}
+library(readr)
+library(lubridate)
+library(stringr)
+library(ggplot2)
+library(plyr)
+library(dplyr)
+
+read_csv("repdata_data_StormData.csv.bz2", n_max = 1, col_names = FALSE)
+```
+Looking at the [data documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf), we see that the only columns that are of interest for these questions are (2) `BGN_DATE`, (8) `EVTYPE`, (23) `FATALITIES`, (24) `INJURIES`, (25) `PROPDMG`, (26) `PROPDMGEXP`, (27) `CROPDMG`, (28) `CROPDMGEXP`. The other columns refer to location (which is irrelevant since all observations are on US territory and we are asked for analysis for the whole of the United States), time and timezone (which is too much detail for this analysis), and text remarks etc. 
+
+## Data Processing
+### Reading in the Data
+Let's read in the data. To avoid any coercion errors, we read all the 37 columns in as `character` type, and coerce columns we need into the correct data type later on.
+```{r cache=TRUE}
+cols <- paste(rep("c", 37), collapse = "")
+stormdata <- read_csv("repdata_data_StormData.csv.bz2",
+                      col_types = cols,
+                      col_names = TRUE)
+```
+
+We start our analysis in 1996. According to the [NCDC website](https://www.ncdc.noaa.gov/stormevents/details.jsp), from that year onwards more event types were recorded. Before that, only Tornado, Thunderstorm Wind and Hail were recorded. Using those earlier years would result in a skewed dataset so we start in 1996.
+
+We do a minor cleanup on the `EVTYPE` variable, trimming whitespace and casting it to lowercase.
+```{r}
+begin_log <- ymd("1996/01/01")
+recent_stormdata <-
+        stormdata %>%
+        mutate(DATE = mdy_hms(BGN_DATE),
+                EVTYPE = tolower(str_trim(EVTYPE))) %>%
+        filter(DATE >= begin_log)
+```
+
+
+### EVTYPE cleanup
+Further cleanup on the `EVTYPE` variable is possible. Let's see which event types are the most common and which event types are correct according to the NCOAA documentation. First, we define the 48 types of events, exactly as mentioned in the [dataset documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf):
+```{r}
+EVTYPES <- c("Astronomical Low Tide", "Avalanche", "Blizzard", "Coastal Flood", "Cold/Wind Chill", "Debris Flow", "Dense Fog", "Dense Smoke", "Drought", "Dust Devil", "Dust Storm", "Excessive Heat", "Extreme Cold/Wind Chill", "Flash Flood", "Flood", "Frost/Freeze", "Funnel Cloud", "Freezing Fog", "Hail", "Heat", "Heavy Rain", "Heavy Snow", "High Surf", "High Wind", "Hurricane (Typhoon)", "Ice Storm", "Lake-Effect Snow", "Lakeshore Flood", "Lightning", "Marine Hail", "Marine High Wind", "Marine Strong Wind", "Marine Thunderstorm Wind", "Rip Current", "Seiche", "Sleet", "Storm Surge/Tide", "Strong Wind", "Thunderstorm Wind", "Tornado", "Tropical Depression", "Tropical Storm", "Tsunami", "Volcanic Ash", "Waterspout", "Wildfire", "Winter Storm", "Winter Weather")
+EVTYPES <- tolower(EVTYPES)
+```
+
+Now for the cleanup. Let's see the frequencies of event types.
+```{r}
+recent_stormdata$CORRECT_TYPE <- recent_stormdata$EVTYPE %in% EVTYPES
+frequencies <-
+        group_by(recent_stormdata, EVTYPE, CORRECT_TYPE) %>%
+        summarize(FREQ = n()) %>%
+        ungroup() %>%
+        arrange(desc(FREQ))
+
+# Check:
+sum(frequencies$FREQ) == nrow(recent_stormdata)
+
+barplot(sort(table(recent_stormdata$EVTYPE)))
+```
+
+It is obvious that there are many rare event types and only a few event types that occur often. Now we look at the 25 most frequent incorrect event types:
+```{r}
+incorrect_types <- as.data.frame(filter(frequencies, !CORRECT_TYPE) %>% arrange(desc(FREQ)))
+
+barplot(sort(table(filter(recent_stormdata, !CORRECT_TYPE)["EVTYPE"])))
+
+incorrect_top25 <- head(incorrect_types, 25)
+print(incorrect_top25)
+```
+
+We see that the frequency drops quickly, the 25th ranked event type already has a frequency of `r incorrect_top25[25, "FREQ"]`, whereas the 1st ranked event type has a frequency of `r incorrect_top25[1, "FREQ"]`. That's quite a distance to cover in just 25 steps! The barplot shows this, too.
+
+So because of this, we don't have to recode all the event types, just recoding the most frequent event types and assigning the rest to a new category named 'other' is good enough for this analysis.
+
+Now to recode these event types to the 48 standard types. As mentoined, I'll add a category 'other' for the rest and for event types that I don't know how to map to one of the 48 types.
+```{r}
+unique_types <- sort(unique(recent_stormdata$EVTYPE))
+lookup <- c(
+                "coastal flooding" = "coastal flood",
+                "extreme cold" = "extreme cold/wind chill",
+                "fog" = "dense fog",
+                "flash flooding" = "flash flood",
+                "freezing rain" = "frost/freeze",
+                "heavy surf/high surf" = "high surf",
+                "hurricane" = "hurricane (typhoon)",
+                "hurricane edouard" = "hurricane (typhoon)",
+                "hurricane/typhoon" = "hurricane (typhoon)",
+                "marine tstm wind" = "marine thunderstorm wind",
+                "mudslide/landslide" = "debris flow",
+                "rip currents" = "rip current",
+                "river flood" = "flood",
+                "snow" = "heavy snow",
+                "storm surge" = "storm surge/tide",
+                "strong winds" = "strong wind",
+                "tstm wind" = "thunderstorm wind",
+                "tstm wind/hail" = "thunderstorm wind",
+                "tstm" = "thunderstorm wind",
+                "tstm  (g45)" = "thunderstorm wind",
+                "tstm wind (41)" = "thunderstorm wind",
+                "tstm wind (g35)" = "thunderstorm wind",
+                "tstm wind 40" = "thunderstorm wind",
+                "tstm wind 45" = "thunderstorm wind",
+                "tstm wind and lightning" = "thunderstorm wind",
+                "tstm wind g45" = "thunderstorm wind",
+                "tstm winds" = "thunderstorm wind",
+                "tstm wnd" = "thunderstorm wind",
+                "thunderstorm wind (g40)" = "thunderstorm wind",
+                "urban/sml stream fld" = "flood",
+                "vog" = "dense fog",
+                "waterspouts" = "waterspout",
+                "wild/forest fire" = "wildfire",
+                "wind" = "strong wind",
+                "wind gusts" = "strong wind",
+                "winds" = "strong wind",
+                "winter weather/mix" = "winter weather"
+           )
+
+corrected <- names(lookup)
+recent_stormdata <- ddply(recent_stormdata, .(EVTYPE), function(x){
+                name <- unique(x$EVTYPE)
+                if(!name %in% EVTYPES) {
+                        if (name %in% corrected) {
+                                x$STD_EVTYPE = lookup[x$EVTYPE][[1]]
+                        } else {
+                                x$STD_EVTYPE = "other"
+                        }
+                } else {
+                        x$STD_EVTYPE = x$EVTYPE
+                }
+                return(x)
+        })
+
+# TODO: use ggplot for nice barplots. Create stacked bars using for example fill = damage.type to show parts for crop and property damage
+barplot(sort(table(recent_stormdata$STD_EVTYPE)))
+
+# Cluster analysis on 'other'
+types <- recent_stormdata#filter(recent_stormdata, !CORRECT_TYPE, STD_EVTYPE == "other")
+s<-sample(unique(types$EVTYPE), size=100, replace=FALSE)
+d<-adist(s)
+rownames(d) <- s
+hc<-hclust(as.dist(d))
+plot(hc)
+```
+Now let's create two data frames, for the effects on public health and economic consequences analyses.
+
+### Effects on Public Health
+```{r}
+health_stormdata <- 
+        recent_stormdata %>%
+        mutate(FATALITIES = as.double(FATALITIES),
+               INJURIES = as.double(INJURIES)) %>%
+        filter(FATALITIES > 0 | INJURIES > 0) %>%
+        rename(EVTYPE = STD_EVTYPE) %>%
+        select(DATE, EVTYPE, FATALITIES, INJURIES)
+
+head(health_stormdata)
+tail(health_stormdata)
+```
+
+### Economic Consequences
+Now we do the same thing for economic consequences. Let's look at the values of the exponent columns for crops and properties, we need these to calculate the correct damages:
+```{r}
+unique(recent_stormdata$CROPDMGEXP)
+unique(recent_stormdata$PROPDMGEXP)
+```
+
+Let's calculate damage, where the `"0"` exponent will be mapped to `1`:
+```{r}
+damage_stormdata <- 
+        recent_stormdata %>%
+        mutate(PROPDMGEXP = mapvalues(PROPDMGEXP,
+                                      from = c("", "0", "K", "M", "B"),
+                                      to = c(1, 1, 1000, 1000000, 1000000000)),
+               CROPDMGEXP = mapvalues(CROPDMGEXP,
+                                      from = c("", "K", "M", "B"),
+                                      to = c(1, 1000, 1000000, 1000000000)),
+               TOTAL_DAMAGE = (as.numeric(PROPDMG) * as.numeric(PROPDMGEXP)) +
+                                (as.numeric(CROPDMG) * as.numeric(CROPDMGEXP))) %>%
+        filter(TOTAL_DAMAGE > 0) %>%
+        rename(EVTYPE = STD_EVTYPE) %>%
+        select(DATE, EVTYPE, TOTAL_DAMAGE)
+
+head(damage_stormdata)
+tail(damage_stormdata)
+```
+
+#### Inflation Adjustment
+We need to correct damages for inflation. Let's get CPI (Consumer Price Index) data, calculate average CPI index per year and set 1996 as the base year (since that is where we begin), to calculate a CPI factor for each year.
+```{r}
+monthly_cpi <-
+        read_csv("http://research.stlouisfed.org/fred2/data/CPIAUCSL.csv", col_names = TRUE)
+monthly_cpi$cpi_year <- year(monthly_cpi$DATE)
+head(monthly_cpi)
+
+yearly_cpi <-
+        monthly_cpi %>%
+        group_by(cpi_year) %>%
+        summarize(cpi = mean(VALUE))
+
+yearly_cpi$adj_factor <- yearly_cpi$cpi / yearly_cpi$cpi[yearly_cpi$cpi_year == 1996]
+head(yearly_cpi)
+tail(yearly_cpi)
+```
+
+Now we use this to our advantage:
+```{r}
+damage_stormdata <- 
+        damage_stormdata %>%
+        mutate(YEAR = year(DATE)) %>%
+        left_join(yearly_cpi, by = c("YEAR" = "cpi_year")) %>%
+        mutate(INFLATION_ADJUSTED_DAMAGE = TOTAL_DAMAGE * adj_factor) %>%
+        select(DATE, EVTYPE, INFLATION_ADJUSTED_DAMAGE)
+
+head(damage_stormdata)
+tail(damage_stormdata)
+```
+
+## Results
+So now that the data is set up, let's look at some overviews and create some pie charts showing which event types have the most effect on public health and the greatest economic consequences.
+
+### Effects on Public Health
+We'll summarize fatalities and injuries here so we can calculate one number for each event type that expresses how much people were affected (killed or injured) by it. Of course, refinements could be made. A weighted sum could be made, where fatalities are weighed more heavily than injuries. This I'll leave as a suggestion for further research. 
+```{r}
+health_result <-
+        health_stormdata %>%
+        group_by(EVTYPE) %>%
+        summarise(HEALTH_AFFECTED = sum(FATALITIES) + sum(INJURIES)) %>%
+        arrange(desc(HEALTH_AFFECTED))
+
+head(health_result)
+
+top10health <- head(health_result, 10)
+
+library(plotrix)
+pie3D(top10health$HEALTH_AFFECTED, labels = top10health$EVTYPE,
+      explode = 0.1, main = "Pie chart of Impact of Storm Events on Public Health")
+```
+
+We see that Tornado, Excessive Heat and Flood have the most impact on public health.
+
+### Economic Consequences
+
+```{r}
+damage_result <-
+        damage_stormdata %>%
+        group_by(EVTYPE) %>%
+        summarize(DAMAGE = sum(INFLATION_ADJUSTED_DAMAGE)) %>%
+        arrange(desc(DAMAGE))
+
+head(damage_result)
+
+top10damage <- head(damage_result, 10)
+pie3D(top10damage$DAMAGE, labels = top10damage$EVTYPE,
+      explode = 0.1, main = "Pie chart of Economic Consequences of Storm Events")
+```
+
+Flood, Hurricane/Typhoon and Storm Surge have the greatest economic consequences.
+
+### Combining effects
+```{R}
+combined <- 
+        full_join(health_result, damage_result) %>%
+        mutate(DAMAGE = DAMAGE / 1000000)
+
+combined_plot <-
+        ggplot(combined, aes(x = DAMAGE, y = HEALTH_AFFECTED, label = EVTYPE)) +
+        geom_point(na.rm = TRUE) +
+        geom_text(angle = 45, hjust = 0, vjust = 0, size = 3) +
+        ylim(0, 25000)
+
+plot(combined_plot)
+```
+
+### Suggestions for further research
+ 1. Add refinements to compare injuries and fatalities. Now they count equally (they are summed), but one could weigh fatalities more heavily than injuries.
+ 1. Recode event types to the 48 event types mentioned in the data documentation pdf file.
+ 
