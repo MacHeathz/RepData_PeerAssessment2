@@ -171,11 +171,11 @@ Now let's create two data frames, for the effects on public health and economic 
 ```{r}
 health_stormdata <- 
         recent_stormdata %>%
+        select(DATE, STD_EVTYPE, FATALITIES, INJURIES) %>%
         mutate(FATALITIES = as.double(FATALITIES),
                INJURIES = as.double(INJURIES)) %>%
         filter(FATALITIES > 0 | INJURIES > 0) %>%
-        rename(EVTYPE = STD_EVTYPE) %>%
-        select(DATE, EVTYPE, FATALITIES, INJURIES)
+        rename(EVTYPE = STD_EVTYPE)
 
 head(health_stormdata)
 tail(health_stormdata)
@@ -192,6 +192,7 @@ Let's calculate damage, where the `"0"` exponent will be mapped to `1`:
 ```{r}
 damage_stormdata <- 
         recent_stormdata %>%
+        select(DATE, STD_EVTYPE, PROPDMGEXP, CROPDMGEXP, PROPDMG, CROPDMG) %>%
         mutate(PROPDMGEXP = mapvalues(PROPDMGEXP,
                                       from = c("", "0", "K", "M", "B"),
                                       to = c(1, 1, 1000, 1000000, 1000000000)),
@@ -212,14 +213,14 @@ tail(damage_stormdata)
 We need to correct damages for inflation. Let's get CPI (Consumer Price Index) data, calculate average CPI index per year and set 1996 as the base year (since that is where we begin), to calculate a CPI factor for each year.
 ```{r}
 monthly_cpi <-
-        read_csv("http://research.stlouisfed.org/fred2/data/CPIAUCSL.csv", col_names = TRUE)
+        read_csv("CPIAUCSL.csv", col_names = TRUE)
 monthly_cpi$cpi_year <- year(monthly_cpi$DATE)
 head(monthly_cpi)
 
 yearly_cpi <-
         monthly_cpi %>%
         group_by(cpi_year) %>%
-        summarize(cpi = mean(VALUE))
+        summarize(cpi = mean(CPIAUCSL))
 
 yearly_cpi$adj_factor <- yearly_cpi$cpi / yearly_cpi$cpi[yearly_cpi$cpi_year == 1996]
 head(yearly_cpi)
